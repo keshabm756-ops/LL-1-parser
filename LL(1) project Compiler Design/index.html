@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LL(1) Predictive Parser Generator</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef1ee;--panel:#fbfcfb;--ink:#17222b;--mute:#5d6b73;--line:#cfd8d3;--acc:#0f6d63;--accbg:#d9ece8;--hot:#b3540a;--hotbg:#fbe6d2;--bad:#b3261e;--badbg:#f8dcda;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10171b;--panel:#182126;--ink:#e4ebe8;--mute:#93a3a9;--line:#2c3a41;--acc:#5cc9b8;--accbg:#173a37;--hot:#f0a35e;--hotbg:#3d2a17;--bad:#ff8a80;--badbg:#411e1c}}
+:root[data-theme="dark"]{--bg:#10171b;--panel:#182126;--ink:#e4ebe8;--mute:#93a3a9;--line:#2c3a41;--acc:#5cc9b8;--accbg:#173a37;--hot:#f0a35e;--hotbg:#3d2a17;--bad:#ff8a80;--badbg:#411e1c}
+html{scroll-padding-top:env(safe-area-inset-top,0px);height:100%}
+*{box-sizing:border-box}
+body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+.mono,textarea,input,table{font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace}
+main{height:100%;display:flex;flex-direction:column;gap:10px;padding:12px 14px}
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+h1{font:600 22px/1.1 Fraunces,Georgia,serif;margin:0;letter-spacing:-.01em}
+h2{font:600 16px/1.2 Fraunces,Georgia,serif;margin:0 0 8px}
+.lede{color:var(--mute);margin:0;font-size:13px}
+.app{flex:1;min-height:0;display:grid;grid-template-columns:270px minmax(0,1fr);gap:10px}
+.col{display:flex;flex-direction:column;gap:10px;min-height:0}
+section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;min-height:0}
+.col>section{flex:1 1 0}
+label{display:block;font-weight:600;font-size:13px;margin:0 0 4px}
+textarea,input[type=text]{width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:8px;font-size:13px}
+textarea{height:120px;resize:vertical;margin-bottom:8px}
+textarea:focus,input:focus,button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.hint{color:var(--mute);font-size:12px;margin:6px 0 10px}
+.verdict{padding:6px 10px;border-radius:6px;font-weight:600;margin-bottom:8px;font-size:13px}
+.ok{background:var(--accbg);color:var(--acc)}.no{background:var(--badbg);color:var(--bad)}
+table{border-collapse:collapse;font-size:12px;width:100%}
+th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;white-space:nowrap}
+th{background:var(--bg);font-weight:600}
+td.cell{text-align:center;min-width:44px}
+td.cell.on{background:var(--hotbg);color:var(--hot);font-weight:600;outline:2px solid var(--hot);outline-offset:-2px}
+td.cell.conf{background:var(--badbg);color:var(--bad)}
+.list{margin:0 0 6px;padding-left:18px;color:var(--bad);font-size:12px}
+.plist{margin:8px 0 0;font-size:12px;color:var(--mute)}
+@media(max-width:900px){body{height:auto;overflow:auto}main{height:auto}.app{display:block}.col{display:block}section{margin-bottom:10px;overflow-x:auto}textarea{height:130px}}
+</style>
+</head>
+<body>
+<main>
+<header><h1>LL(1) predictive parser generator</h1><p class="lede">Type one grammar, get FIRST/FOLLOW sets and the LL(1) parsing table.</p></header>
+<div class="app">
+<section>
+<h2>Grammar</h2>
+<label for="g">Productions, one per line</label>
+<textarea id="g" spellcheck="false">E=TQ
+Q=+TQ|#
+T=FR
+R=*FR|#
+F=(E)|i</textarea>
+<p class="hint">One character per symbol. <b>|</b> alternatives, <b>#</b> epsilon, <b>$</b> end marker. First line's left side is the start symbol.</p>
+<p class="plist" id="plist"></p>
+</section>
+<div class="col">
+<section><h2>FIRST and FOLLOW</h2><div id="verdict"></div><table id="ff"></table></section>
+<section><h2>Parsing table</h2><table id="pt"></table></section>
+</div>
+</div>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let G;
+
+function build(text){
+  const prods=[],errs=[];
+  text.split('\n').map(l=>l.replace(/\s+/g,'')).filter(Boolean).forEach((l,i)=>{
+    const m=l.match(/^(.)(?:=|->)(.*)$/);
+    if(!m){errs.push('Line '+(i+1)+': use the form E=TQ|#');return;}
+    m[2].split('|').forEach(r=>prods.push({l:m[1],r:r||'#'}));
+  });
+  const nts=[...new Set(prods.map(p=>p.l))],NT=new Set(nts),ts=[];
+  prods.forEach(p=>[...p.r].forEach(c=>{if(c!=='#'&&!NT.has(c)&&!ts.includes(c))ts.push(c)}));
+  ts.push('$');
+  const start=prods.length?prods[0].l:'';
+  const F={},Fo={};nts.forEach(n=>{F[n]=new Set();Fo[n]=new Set()});
+  const firstStr=s=>{
+    const res=new Set();let nul=true;
+    for(const c of s){
+      if(c==='#')continue;
+      if(NT.has(c)){F[c].forEach(x=>x!=='#'&&res.add(x));if(!F[c].has('#')){nul=false;break}}
+      else{res.add(c);nul=false;break}
+    }
+    if(nul)res.add('#');return res;
+  };
+  let ch=true;
+  while(ch){ch=false;prods.forEach(p=>firstStr(p.r).forEach(x=>{if(!F[p.l].has(x)){F[p.l].add(x);ch=true}}))}
+  if(start)Fo[start].add('$');
+  ch=true;
+  while(ch){ch=false;prods.forEach(p=>[...p.r].forEach((c,j)=>{
+    if(!NT.has(c))return;
+    const fs=firstStr(p.r.slice(j+1)),add=x=>{if(!Fo[c].has(x)){Fo[c].add(x);ch=true}};
+    fs.forEach(x=>x!=='#'&&add(x));
+    if(fs.has('#'))Fo[p.l].forEach(add);
+  }))}
+  const T={};nts.forEach(n=>{T[n]={};ts.forEach(t=>T[n][t]=[])});
+  prods.forEach((p,i)=>{
+    const fs=firstStr(p.r),put=t=>{if(T[p.l][t]&&!T[p.l][t].includes(i))T[p.l][t].push(i)};
+    fs.forEach(t=>t!=='#'&&put(t));
+    if(fs.has('#'))Fo[p.l].forEach(put);
+  });
+  return{prods,errs,nts,NT,ts,start,F,Fo,T};
+}
+
+function render(){
+  G=build($('g').value);
+  const{prods,errs,nts,ts,F,Fo,T,start}=G;
+  $('plist').innerHTML=prods.map((p,i)=>`${i+1}. ${esc(p.l)} → ${esc(p.r)}`).join('<br>');
+  const conf=[];
+  nts.forEach(n=>ts.forEach(t=>{if(T[n][t].length>1)conf.push(`M[${n}, ${t}] holds productions ${T[n][t].map(x=>x+1).join(' and ')}`)}));
+  let v='';
+  if(errs.length)v=`<div class="verdict no">Check the grammar</div><ul class="list">${errs.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`;
+  else if(!prods.length)v='<div class="verdict no">Enter at least one production</div>';
+  else if(conf.length)v=`<div class="verdict no">Not LL(1): ${conf.length} conflict${conf.length>1?'s':''}</div><ul class="list">${conf.map(c=>`<li>${esc(c)}</li>`).join('')}</ul><p class="hint">Left recursion or a shared prefix usually causes this.</p>`;
+  else v='<div class="verdict ok">This grammar is LL(1)</div>';
+  $('verdict').innerHTML=v;
+  const set=s=>'{ '+[...s].map(esc).join(', ')+' }';
+  $('ff').innerHTML='<tr><th></th><th>FIRST</th><th>FOLLOW</th></tr>'+nts.map(n=>`<tr><th>${esc(n)}${n===start?' (start)':''}</th><td>${set(F[n])}</td><td>${set(Fo[n])}</td></tr>`).join('');
+  $('pt').innerHTML='<tr><th></th>'+ts.map(t=>`<th>${esc(t)}</th>`).join('')+'</tr>'+nts.map((n,ni)=>`<tr><th>${esc(n)}</th>`+ts.map((t,ti)=>{
+    const c=T[n][t];return`<td class="cell${c.length>1?' conf':''}" id="c${ni}_${ti}">${c.map(x=>x+1).join(',')}</td>`}).join('')+'</tr>').join('');
+}
+$('g').oninput=render;
+render();
+</script>
+</body>
+</html>
