@@ -22,9 +22,6 @@ T=FR
 R=*FR|#
 F=(E)|i
 ```
-## Parser result
-
-give input -> i+i*i
 
 ## Run it
 
